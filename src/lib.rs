@@ -8,6 +8,13 @@ use std::{
 
 type Result<T> = anyhow::Result<T>;
 
+pub trait Readable {
+    type Parameters<'a>;
+    type ReturnType: Clone;
+
+    fn read(&self, parameters: &Self::Parameters<'_>) -> Self::ReturnType;
+}
+
 pub trait Updateable {
     type Parameters: Serialize + DeserializeOwned;
 
@@ -25,7 +32,7 @@ const NEW_VERSION_FILE: &str = "new_version";
 const CHECKPOINT_PREFIX: &str = "checkpoint.";
 const LOG_PREFIX: &str = "logfile.";
 
-impl<T: Default + Serialize + DeserializeOwned + Updateable> Database<T> {
+impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database<T> {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Database<T>> {
         let path = path.as_ref().to_path_buf();
         if !path.exists() {
@@ -58,7 +65,15 @@ impl<T: Default + Serialize + DeserializeOwned + Updateable> Database<T> {
         }
     }
 
-    pub fn read(&self) -> RwLockReadGuard<'_, T> {
+    pub fn read(
+        &self,
+        parameters: &<T as Readable>::Parameters<'_>,
+    ) -> <T as Readable>::ReturnType {
+        let locked = self.data.read().unwrap();
+        locked.read(parameters)
+    }
+
+    pub fn read_all(&self) -> RwLockReadGuard<'_, T> {
         self.data.read().unwrap()
     }
 
@@ -135,6 +150,12 @@ impl<T: Default + Serialize + DeserializeOwned + Updateable> Database<T> {
     }
 }
 
+impl<T: Clone> Database<T> {
+    pub fn clone_data(&self) -> T {
+        self.data.read().unwrap().clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,16 +164,37 @@ mod tests {
     use tempfile::TempDir;
 
     type KeyValueStore = BTreeMap<String, String>;
+
+    pub enum KvReadParams<'a> {
+        Get(&'a str),
+    }
+
+    #[derive(Clone)]
+    pub enum KvReadReturn {
+        Get(Option<String>),
+    }
+
+    impl Readable for KeyValueStore {
+        type Parameters<'a> = KvReadParams<'a>;
+        type ReturnType = KvReadReturn;
+
+        fn read(&self, params: &KvReadParams) -> KvReadReturn {
+            match params {
+                KvReadParams::Get(k) => KvReadReturn::Get(self.get(*k).cloned()),
+            }
+        }
+    }
+
     #[derive(Serialize, Deserialize)]
-    pub enum KVParams {
+    pub enum KvUpdateParams {
         Insert(String, String),
     }
 
     impl Updateable for KeyValueStore {
-        type Parameters = KVParams;
-        fn update(&mut self, params: &KVParams) {
+        type Parameters = KvUpdateParams;
+        fn update(&mut self, params: &KvUpdateParams) {
             match params {
-                KVParams::Insert(k, v) => self.insert(k.clone(), v.clone()),
+                KvUpdateParams::Insert(k, v) => self.insert(k.clone(), v.clone()),
             };
         }
     }
@@ -164,15 +206,117 @@ mod tests {
         // create new db
         let path = tempdir.path().join("kv-store");
         let db = Database::<KeyValueStore>::open(&path).unwrap();
-        let insert = &KVParams::Insert("key".to_string(), "value".to_string());
+        let insert = &KvUpdateParams::Insert("key".to_string(), "value".to_string());
         db.update(insert).unwrap();
-        let insert = &KVParams::Insert("more".to_string(), "value".to_string());
+        let insert = &KvUpdateParams::Insert("more".to_string(), "value".to_string());
         db.update(insert).unwrap();
-        let data = db.read().clone();
+        let data = db.clone_data();
 
         // re-open db
         let db = Database::<KeyValueStore>::open(&path).unwrap();
-        assert_eq!(data, *db.read());
+        assert_eq!(data, *db.read_all());
+
+        // delete
+        db.delete().unwrap();
+    }
+
+    #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
+    struct MyKeyValueStore {
+        store: BTreeMap<String, String>,
+    }
+
+    impl MyKeyValueStore {
+        pub fn insert(&mut self, key: &str, value: &str) {
+            self.store.insert(key.to_string(), value.to_string());
+        }
+
+        pub fn get(&self, key: &str) -> Option<String> {
+            self.store.get(key).cloned()
+        }
+    }
+
+    enum MyKvReadParams<'a> {
+        Get(&'a str),
+    }
+
+    #[derive(Clone)]
+    enum MyKvReadReturn {
+        Get(Option<String>),
+    }
+
+    impl Readable for MyKeyValueStore {
+        type Parameters<'a> = MyKvReadParams<'a>;
+        type ReturnType = MyKvReadReturn;
+
+        fn read(&self, params: &MyKvReadParams) -> MyKvReadReturn {
+            match params {
+                MyKvReadParams::Get(k) => MyKvReadReturn::Get(self.get(k).clone()),
+            }
+        }
+    }
+
+    #[derive(Serialize, Deserialize)]
+    enum MyKvUpdateParams {
+        Insert(String, String),
+    }
+
+    impl Updateable for MyKeyValueStore {
+        type Parameters = MyKvUpdateParams;
+
+        fn update(&mut self, params: &MyKvUpdateParams) {
+            match params {
+                MyKvUpdateParams::Insert(k, v) => self.insert(k, v),
+            }
+        }
+    }
+
+    struct MyKeyValueStoreDb {
+        db: Database<MyKeyValueStore>,
+    }
+
+    impl MyKeyValueStoreDb {
+        pub fn open<P: AsRef<Path>>(path: P) -> Result<MyKeyValueStoreDb> {
+            let db = Database::open(path)?;
+            Ok(MyKeyValueStoreDb { db })
+        }
+
+        pub fn insert(&self, key: &str, value: &str) -> Result<()> {
+            self.db.update(&MyKvUpdateParams::Insert(
+                key.to_string(),
+                value.to_string(),
+            ))
+        }
+
+        pub fn get(&self, key: &str) -> Option<String> {
+            match self.db.read(&MyKvReadParams::Get(key)) {
+                MyKvReadReturn::Get(value) => value,
+            }
+        }
+
+        pub fn clone_data(&self) -> MyKeyValueStore {
+            self.db.clone_data()
+        }
+
+        pub fn delete(self) -> Result<()> {
+            self.db.delete()
+        }
+    }
+
+    #[test]
+    fn test_derive() {
+        let tempdir = TempDir::with_prefix("bjw-").unwrap();
+
+        // create new db
+        let path = tempdir.path().join("kv-store");
+        let db = MyKeyValueStoreDb::open(&path).unwrap();
+        db.insert("key", "value").unwrap();
+        db.insert("more", "value").unwrap();
+        assert_eq!(db.get("key"), Some("value".to_string()));
+        let data = db.clone_data();
+
+        // re-open db
+        let db = MyKeyValueStoreDb::open(&path).unwrap();
+        assert_eq!(data, db.clone_data());
 
         // delete
         db.delete().unwrap();
