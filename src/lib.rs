@@ -9,16 +9,16 @@ use std::{
 type Result<T> = anyhow::Result<T>;
 
 pub trait Readable {
-    type Parameters<'a>;
+    type Args<'a>;
     type ReturnType: Clone;
 
-    fn read(&self, parameters: &Self::Parameters<'_>) -> Self::ReturnType;
+    fn read(&self, args: &Self::Args<'_>) -> Self::ReturnType;
 }
 
 pub trait Updateable {
-    type Parameters: Serialize + DeserializeOwned;
+    type Args: Serialize + DeserializeOwned;
 
-    fn update(&mut self, parameters: &Self::Parameters);
+    fn update(&mut self, args: &Self::Args);
 }
 
 pub struct Database<T> {
@@ -65,10 +65,7 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         }
     }
 
-    pub fn read(
-        &self,
-        parameters: &<T as Readable>::Parameters<'_>,
-    ) -> <T as Readable>::ReturnType {
+    pub fn read(&self, parameters: &<T as Readable>::Args<'_>) -> <T as Readable>::ReturnType {
         let locked = self.data.read().unwrap();
         locked.read(parameters)
     }
@@ -77,7 +74,7 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         self.data.read().unwrap()
     }
 
-    pub fn update(&self, parameters: &<T as Updateable>::Parameters) -> Result<()> {
+    pub fn update(&self, parameters: &<T as Updateable>::Args) -> Result<()> {
         let mut locked = self.data.write().unwrap();
         self.extend_update_log(parameters)?;
         locked.update(parameters);
@@ -95,7 +92,7 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         let lines = BufReader::new(file).lines();
         let mut locked = self.data.write().unwrap();
         for line in lines {
-            let parameters: <T as Updateable>::Parameters = serde_json::from_str(line?.as_ref())?;
+            let parameters: <T as Updateable>::Args = serde_json::from_str(line?.as_ref())?;
             locked.update(&parameters);
         }
         Ok(())
@@ -111,7 +108,7 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         Ok(path.clone())
     }
 
-    fn extend_update_log(&self, parameters: &<T as Updateable>::Parameters) -> Result<()> {
+    fn extend_update_log(&self, parameters: &<T as Updateable>::Args) -> Result<()> {
         let path = self.create_logfile_if_required()?;
         let mut json_str = serde_json::to_string(parameters)?;
         json_str.push('\n');
@@ -165,7 +162,7 @@ mod tests {
 
     type KeyValueStore = BTreeMap<String, String>;
 
-    pub enum KvReadParams<'a> {
+    pub enum KvReadArgs<'a> {
         Get(&'a str),
     }
 
@@ -175,26 +172,26 @@ mod tests {
     }
 
     impl Readable for KeyValueStore {
-        type Parameters<'a> = KvReadParams<'a>;
+        type Args<'a> = KvReadArgs<'a>;
         type ReturnType = KvReadReturn;
 
-        fn read(&self, params: &KvReadParams) -> KvReadReturn {
+        fn read(&self, params: &KvReadArgs) -> KvReadReturn {
             match params {
-                KvReadParams::Get(k) => KvReadReturn::Get(self.get(*k).cloned()),
+                KvReadArgs::Get(k) => KvReadReturn::Get(self.get(*k).cloned()),
             }
         }
     }
 
     #[derive(Serialize, Deserialize)]
-    pub enum KvUpdateParams {
+    pub enum KvUpdateArgs {
         Insert(String, String),
     }
 
     impl Updateable for KeyValueStore {
-        type Parameters = KvUpdateParams;
-        fn update(&mut self, params: &KvUpdateParams) {
+        type Args = KvUpdateArgs;
+        fn update(&mut self, params: &KvUpdateArgs) {
             match params {
-                KvUpdateParams::Insert(k, v) => self.insert(k.clone(), v.clone()),
+                KvUpdateArgs::Insert(k, v) => self.insert(k.clone(), v.clone()),
             };
         }
     }
@@ -206,9 +203,9 @@ mod tests {
         // create new db
         let path = tempdir.path().join("kv-store");
         let db = Database::<KeyValueStore>::open(&path).unwrap();
-        let insert = &KvUpdateParams::Insert("key".to_string(), "value".to_string());
+        let insert = &KvUpdateArgs::Insert("key".to_string(), "value".to_string());
         db.update(insert).unwrap();
-        let insert = &KvUpdateParams::Insert("more".to_string(), "value".to_string());
+        let insert = &KvUpdateArgs::Insert("more".to_string(), "value".to_string());
         db.update(insert).unwrap();
         let data = db.clone_data();
 
@@ -220,97 +217,32 @@ mod tests {
         db.delete().unwrap();
     }
 
-    #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
-    struct MyKeyValueStore {
-        store: BTreeMap<String, String>,
-    }
-
-    impl MyKeyValueStore {
-        pub fn insert(&mut self, key: &str, value: &str) {
-            self.store.insert(key.to_string(), value.to_string());
-        }
-
-        pub fn get(&self, key: &str) -> Option<String> {
-            self.store.get(key).cloned()
-        }
-    }
-
-    enum MyKvReadParams<'a> {
-        Get(&'a str),
-    }
-
-    #[derive(Clone)]
-    enum MyKvReadReturn {
-        Get(Option<String>),
-    }
-
-    impl Readable for MyKeyValueStore {
-        type Parameters<'a> = MyKvReadParams<'a>;
-        type ReturnType = MyKvReadReturn;
-
-        fn read(&self, params: &MyKvReadParams) -> MyKvReadReturn {
-            match params {
-                MyKvReadParams::Get(k) => MyKvReadReturn::Get(self.get(k).clone()),
-            }
-        }
-    }
-
-    #[derive(Serialize, Deserialize)]
-    enum MyKvUpdateParams {
-        Insert(String, String),
-    }
-
-    impl Updateable for MyKeyValueStore {
-        type Parameters = MyKvUpdateParams;
-
-        fn update(&mut self, params: &MyKvUpdateParams) {
-            match params {
-                MyKvUpdateParams::Insert(k, v) => self.insert(k, v),
-            }
-        }
-    }
-
-    struct MyKeyValueStoreDb {
-        db: Database<MyKeyValueStore>,
-    }
-
-    impl MyKeyValueStoreDb {
-        pub fn open<P: AsRef<Path>>(path: P) -> Result<MyKeyValueStoreDb> {
-            let db = Database::open(path)?;
-            Ok(MyKeyValueStoreDb { db })
-        }
-
-        pub fn insert(&self, key: &str, value: &str) -> Result<()> {
-            self.db.update(&MyKvUpdateParams::Insert(
-                key.to_string(),
-                value.to_string(),
-            ))
-        }
-
-        pub fn get(&self, key: &str) -> Option<String> {
-            match self.db.read(&MyKvReadParams::Get(key)) {
-                MyKvReadReturn::Get(value) => value,
-            }
-        }
-
-        pub fn clone_data(&self) -> MyKeyValueStore {
-            self.db.clone_data()
-        }
-
-        pub fn delete(self) -> Result<()> {
-            self.db.delete()
-        }
-    }
-
     #[test]
+    #[cfg(feature = "derive")]
     fn test_derive() {
+        #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
+        struct MyKeyValueStore {
+            store: BTreeMap<String, String>,
+        }
+
+        #[bjw_db_derive::derive_bjw_db]
+        impl MyKeyValueStore {
+            pub fn insert(&mut self, key: String, value: String) {
+                self.store.insert(key, value);
+            }
+
+            pub fn get(&self, key: &str) -> Option<String> {
+                self.store.get(key).cloned()
+            }
+        }
+
         let tempdir = TempDir::with_prefix("bjw-").unwrap();
 
         // create new db
         let path = tempdir.path().join("kv-store");
         let db = MyKeyValueStoreDb::open(&path).unwrap();
-        db.insert("key", "value").unwrap();
-        db.insert("more", "value").unwrap();
+        db.insert("key".to_string(), "value".to_string()).unwrap();
+        db.insert("more".to_string(), "value".to_string()).unwrap();
         assert_eq!(db.get("key"), Some("value".to_string()));
         let data = db.clone_data();
 
