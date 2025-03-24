@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{FnArg, ItemImpl, PatType, ReturnType, Type, TypeReference, parse_macro_input};
+use syn::{FnArg, Ident, ItemImpl, PatType, ReturnType, Type, TypeReference, parse_macro_input};
 
 fn uppercase_first(input: &str) -> String {
     if input.is_empty() {
@@ -17,7 +17,12 @@ fn uppercase_first(input: &str) -> String {
 }
 
 #[proc_macro_attribute]
-pub fn derive_bjw_db(_args: TokenStream, item: TokenStream) -> TokenStream {
+pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
+    let thread_safe = match syn::parse::<Ident>(args) {
+        Ok(i) => i == "thread_safe",
+        Err(_) => false,
+    };
+
     let input = parse_macro_input!(item as ItemImpl);
     let cloned = input.clone();
 
@@ -26,6 +31,28 @@ pub fn derive_bjw_db(_args: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         panic!("Expected a struct implementation");
     };
+
+    // some things differ between the thread_safe and the not thread_safe version
+    let (wrapped_type, constructor, read_acces, write_access, mut_self, delete_impl) =
+        if thread_safe {
+            (
+                quote! { std::sync::RwLock<Database<#struct_name>> },
+                quote! { Ok(Self { db: std::sync::RwLock::new(db) }) },
+                quote! { self.db.read().unwrap() },
+                quote! { self.db.write().unwrap() },
+                quote! { &self },
+                quote! { self.db.into_inner().unwrap().delete() },
+            )
+        } else {
+            (
+                quote! { Database<#struct_name> },
+                quote! { Ok(Self { db }) },
+                quote! { self.db },
+                quote! { self.db },
+                quote! { &mut self },
+                quote! { self.db.delete() },
+            )
+        };
 
     // build the names for the three enums we need
     let read_params_ident = format_ident!("{}ReadParams", struct_name);
@@ -98,7 +125,7 @@ pub fn derive_bjw_db(_args: TokenStream, item: TokenStream) -> TokenStream {
 
                 read_methods.push(quote! {
                     pub fn #method_name(&self, #(#arg_names: #arg_types),*) -> #return_type {
-                        match self.db.read(&#read_params_ident::#variant_name(#(#arg_names),*)) {
+                        match #read_acces.read(&#read_params_ident::#variant_name(#(#arg_names),*)) {
                             #read_return_ident::#variant_name(value) => value,
                         }
                     }
@@ -110,8 +137,8 @@ pub fn derive_bjw_db(_args: TokenStream, item: TokenStream) -> TokenStream {
                 });
 
                 update_methods.push(quote! {
-                    pub fn #method_name(&mut self, #(#arg_names: #arg_types),*) -> Result<#return_type> {
-                        self.db.update(&#update_params_ident::#variant_name(#(#arg_names),*))
+                    pub fn #method_name(#mut_self, #(#arg_names: #arg_types),*) -> Result<#return_type> {
+                        #write_access.update(&#update_params_ident::#variant_name(#(#arg_names),*))
                     }
                 });
             }
@@ -156,28 +183,28 @@ pub fn derive_bjw_db(_args: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         pub struct #db_struct_ident {
-            db: Database<#struct_name>,
+            db: #wrapped_type
         }
 
         impl #db_struct_ident {
             pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
                 let db = Database::open(path)?;
-                Ok(Self { db })
+                #constructor
             }
 
             #(#read_methods)*
             #(#update_methods)*
 
-            pub fn create_checkpoint(&mut self) -> Result<()> {
-                self.db.create_checkpoint()
+            pub fn create_checkpoint(#mut_self) -> Result<()> {
+                #write_access.create_checkpoint()
             }
 
             pub fn clone_data(&self) -> #struct_name {
-                self.db.clone_data()
+                #read_acces.clone_data()
             }
 
             pub fn delete(self) -> Result<()> {
-                self.db.delete()
+                #delete_impl
             }
         }
     };
