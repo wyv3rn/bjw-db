@@ -3,7 +3,6 @@ use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    sync::{RwLock, RwLockReadGuard},
 };
 
 type Result<T> = anyhow::Result<T>;
@@ -22,15 +21,16 @@ pub trait Updateable {
 }
 
 pub struct Database<T> {
-    data: RwLock<T>,
+    data: T,
     path: PathBuf,
     version: u64,
 }
 
 const VERSION_FILE: &str = "version";
 const NEW_VERSION_FILE: &str = "new_version";
-const CHECKPOINT_PREFIX: &str = "checkpoint.";
-const LOG_PREFIX: &str = "logfile.";
+const CHECKPOINT_PREFIX: &str = "checkpoint";
+const LOG_PREFIX: &str = "logfile";
+const DELIM: char = '.';
 
 impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database<T> {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Database<T>> {
@@ -38,7 +38,7 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         if !path.exists() {
             std::fs::create_dir_all(&path)?;
             let db = Database {
-                data: RwLock::default(),
+                data: <T as Default>::default(),
                 path,
                 version: 0,
             };
@@ -55,7 +55,7 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
             let version_str = std::fs::read_to_string(version_path)?;
             let version: u64 = version_str.parse()?;
             let mut db = Database {
-                data: RwLock::default(),
+                data: <T as Default>::default(),
                 path,
                 version,
             };
@@ -66,18 +66,27 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
     }
 
     pub fn read(&self, parameters: &<T as Readable>::Args<'_>) -> <T as Readable>::ReturnType {
-        let locked = self.data.read().unwrap();
-        locked.read(parameters)
+        self.data.read(parameters)
     }
 
-    pub fn read_all(&self) -> RwLockReadGuard<'_, T> {
-        self.data.read().unwrap()
+    pub fn read_all(&self) -> &T {
+        &self.data
     }
 
-    pub fn update(&self, parameters: &<T as Updateable>::Args) -> Result<()> {
-        let mut locked = self.data.write().unwrap();
+    pub fn update(&mut self, parameters: &<T as Updateable>::Args) -> Result<()> {
         self.extend_update_log(parameters)?;
-        locked.update(parameters);
+        self.data.update(parameters);
+        Ok(())
+    }
+
+    pub fn create_checkpoint(&mut self) -> Result<()> {
+        self.version += 1;
+        self.write_checkpoint_file()?;
+        self.create_logfile_if_required()?;
+        self.update_version_file()?;
+        if let Err(e) = self.cleanup() {
+            log::warn!("Failed to cleanup: {:?}", e);
+        };
         Ok(())
     }
 
@@ -87,19 +96,18 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
     }
 
     fn replay_updates(&mut self) -> Result<()> {
-        let log_filename = format!("{LOG_PREFIX}{}", self.version);
+        let log_filename = format!("{LOG_PREFIX}{DELIM}{}", self.version);
         let file = File::open(self.path.join(log_filename))?;
         let lines = BufReader::new(file).lines();
-        let mut locked = self.data.write().unwrap();
         for line in lines {
             let parameters: <T as Updateable>::Args = serde_json::from_str(line?.as_ref())?;
-            locked.update(&parameters);
+            self.data.update(&parameters);
         }
         Ok(())
     }
 
     fn create_logfile_if_required(&self) -> Result<PathBuf> {
-        let filename = format!("{LOG_PREFIX}{}", self.version);
+        let filename = format!("{LOG_PREFIX}{DELIM}{}", self.version);
         let path = self.path.join(filename);
         if !path.exists() {
             let file = File::create(&path)?;
@@ -119,15 +127,15 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
     }
 
     fn read_checkpoint_file(&mut self) -> Result<()> {
-        let filename = format!("{CHECKPOINT_PREFIX}{}", self.version);
+        let filename = format!("{CHECKPOINT_PREFIX}{DELIM}{}", self.version);
         let json_str = std::fs::read_to_string(self.path.join(filename))?;
         let data: T = serde_json::from_str(&json_str)?;
-        self.data = RwLock::new(data);
+        self.data = data;
         Ok(())
     }
 
     fn write_checkpoint_file(&self) -> Result<()> {
-        let filename = format!("{CHECKPOINT_PREFIX}{}", self.version);
+        let filename = format!("{CHECKPOINT_PREFIX}{DELIM}{}", self.version);
         let mut file = File::create(self.path.join(filename))?;
         let json_str = serde_json::to_string(&self.data)?;
         file.write_all(json_str.as_bytes())?;
@@ -145,11 +153,43 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         )?;
         Ok(())
     }
+
+    fn cleanup(&self) -> Result<()> {
+        for entry in std::fs::read_dir(&self.path)? {
+            let entry = entry?;
+            if entry.metadata()?.is_file() {
+                if let Ok(filename) = entry.file_name().into_string() {
+                    if self.is_outdated_file(&filename) {
+                        std::fs::remove_file(entry.path())?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn is_outdated_file(&self, filename: &str) -> bool {
+        if filename == NEW_VERSION_FILE {
+            return true;
+        };
+
+        if let Some((base, ext)) = filename.rsplit_once(DELIM) {
+            if base == CHECKPOINT_PREFIX || base == LOG_PREFIX {
+                if let Ok(version) = ext.parse::<u64>() {
+                    if version < self.version {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
 }
 
 impl<T: Clone> Database<T> {
     pub fn clone_data(&self) -> T {
-        self.data.read().unwrap().clone()
+        self.data.clone()
     }
 }
 
@@ -202,16 +242,25 @@ mod tests {
 
         // create new db
         let path = tempdir.path().join("kv-store");
-        let db = Database::<KeyValueStore>::open(&path).unwrap();
+        let mut db = Database::<KeyValueStore>::open(&path).unwrap();
         let insert = &KvUpdateArgs::Insert("key".to_string(), "value".to_string());
         db.update(insert).unwrap();
         let insert = &KvUpdateArgs::Insert("more".to_string(), "value".to_string());
         db.update(insert).unwrap();
-        let data = db.clone_data();
+
+        // create a checkpoint and make an update
+        db.create_checkpoint().unwrap();
+        let insert = &KvUpdateArgs::Insert("another".to_string(), "one".to_string());
+        db.update(insert).unwrap();
 
         // re-open db
-        let db = Database::<KeyValueStore>::open(&path).unwrap();
+        let data = db.clone_data();
+        let mut db = Database::<KeyValueStore>::open(&path).unwrap();
         assert_eq!(data, *db.read_all());
+
+        // create a checkpoint and don't update, but re-open right away (-> tests empty log)
+        db.create_checkpoint().unwrap();
+        let db = Database::<KeyValueStore>::open(&path).unwrap();
 
         // delete
         db.delete().unwrap();
@@ -240,13 +289,16 @@ mod tests {
 
         // create new db
         let path = tempdir.path().join("kv-store");
-        let db = MyKeyValueStoreDb::open(&path).unwrap();
+        let mut db = MyKeyValueStoreDb::open(&path).unwrap();
         db.insert("key".to_string(), "value".to_string()).unwrap();
         db.insert("more".to_string(), "value".to_string()).unwrap();
         assert_eq!(db.get("key"), Some("value".to_string()));
-        let data = db.clone_data();
+
+        // create a checkpoint
+        db.create_checkpoint().unwrap();
 
         // re-open db
+        let data = db.clone_data();
         let db = MyKeyValueStoreDb::open(&path).unwrap();
         assert_eq!(data, db.clone_data());
 

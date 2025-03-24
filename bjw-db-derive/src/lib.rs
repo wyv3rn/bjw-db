@@ -110,7 +110,7 @@ pub fn derive_bjw_db(_args: TokenStream, item: TokenStream) -> TokenStream {
                 });
 
                 update_methods.push(quote! {
-                    pub fn #method_name(&self, #(#arg_names: #arg_types),*) -> Result<#return_type> {
+                    pub fn #method_name(&mut self, #(#arg_names: #arg_types),*) -> Result<#return_type> {
                         self.db.update(&#update_params_ident::#variant_name(#(#arg_names),*))
                     }
                 });
@@ -167,6 +167,10 @@ pub fn derive_bjw_db(_args: TokenStream, item: TokenStream) -> TokenStream {
 
             #(#read_methods)*
             #(#update_methods)*
+
+            pub fn create_checkpoint(&mut self) -> Result<()> {
+                self.db.create_checkpoint()
+            }
 
             pub fn clone_data(&self) -> #struct_name {
                 self.db.clone_data()
