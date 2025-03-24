@@ -200,75 +200,9 @@ mod tests {
     use std::collections::BTreeMap;
     use tempfile::TempDir;
 
-    type KeyValueStore = BTreeMap<String, String>;
-
-    pub enum KvReadArgs<'a> {
-        Get(&'a str),
-    }
-
-    #[derive(Clone)]
-    pub enum KvReadReturn {
-        Get(Option<String>),
-    }
-
-    impl Readable for KeyValueStore {
-        type Args<'a> = KvReadArgs<'a>;
-        type ReturnType = KvReadReturn;
-
-        fn read(&self, params: &KvReadArgs) -> KvReadReturn {
-            match params {
-                KvReadArgs::Get(k) => KvReadReturn::Get(self.get(*k).cloned()),
-            }
-        }
-    }
-
-    #[derive(Serialize, Deserialize)]
-    pub enum KvUpdateArgs {
-        Insert(String, String),
-    }
-
-    impl Updateable for KeyValueStore {
-        type Args = KvUpdateArgs;
-        fn update(&mut self, params: &KvUpdateArgs) {
-            match params {
-                KvUpdateArgs::Insert(k, v) => self.insert(k.clone(), v.clone()),
-            };
-        }
-    }
-
-    #[test]
-    fn test_key_value_store() {
-        let tempdir = TempDir::with_prefix("bjw-").unwrap();
-
-        // create new db
-        let path = tempdir.path().join("kv-store");
-        let mut db = Database::<KeyValueStore>::open(&path).unwrap();
-        let insert = &KvUpdateArgs::Insert("key".to_string(), "value".to_string());
-        db.update(insert).unwrap();
-        let insert = &KvUpdateArgs::Insert("more".to_string(), "value".to_string());
-        db.update(insert).unwrap();
-
-        // create a checkpoint and make an update
-        db.create_checkpoint().unwrap();
-        let insert = &KvUpdateArgs::Insert("another".to_string(), "one".to_string());
-        db.update(insert).unwrap();
-
-        // re-open db
-        let data = db.clone_data();
-        let mut db = Database::<KeyValueStore>::open(&path).unwrap();
-        assert_eq!(data, *db.read_all());
-
-        // create a checkpoint and don't update, but re-open right away (-> tests empty log)
-        db.create_checkpoint().unwrap();
-        let db = Database::<KeyValueStore>::open(&path).unwrap();
-
-        // delete
-        db.delete().unwrap();
-    }
-
     #[test]
     #[cfg(feature = "derive")]
-    fn test_derive() {
+    fn test_normal_operation() {
         #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
         struct MyKeyValueStore {
             store: BTreeMap<String, String>,
@@ -296,11 +230,17 @@ mod tests {
 
         // create a checkpoint
         db.create_checkpoint().unwrap();
+        db.insert("another".to_string(), "pair".to_string())
+            .unwrap();
 
         // re-open db
         let data = db.clone_data();
-        let db = MyKeyValueStoreDb::open(&path).unwrap();
+        let mut db = MyKeyValueStoreDb::open(&path).unwrap();
         assert_eq!(data, db.clone_data());
+
+        // create a checkpoint and don't update, but re-open right away (-> tests empty log)
+        db.create_checkpoint().unwrap();
+        let db = Database::<MyKeyValueStore>::open(&path).unwrap();
 
         // delete
         db.delete().unwrap();
