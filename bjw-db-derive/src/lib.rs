@@ -33,26 +33,26 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // some things differ between the thread_safe and the not thread_safe version
-    let (wrapped_type, constructor, read_acces, write_access, mut_self, delete_impl) =
-        if thread_safe {
-            (
-                quote! { std::sync::RwLock<Database<#struct_name>> },
-                quote! { Ok(Self { db: std::sync::RwLock::new(db) }) },
-                quote! { self.db.read().unwrap() },
-                quote! { self.db.write().unwrap() },
-                quote! { &self },
-                quote! { self.db.into_inner().unwrap().delete() },
-            )
-        } else {
-            (
-                quote! { Database<#struct_name> },
-                quote! { Ok(Self { db }) },
-                quote! { self.db },
-                quote! { self.db },
-                quote! { &mut self },
-                quote! { self.db.delete() },
-            )
-        };
+    let (wrapped_type, constructor, read_acces, write_access, mut_self, into_inner) = if thread_safe
+    {
+        (
+            quote! { std::sync::RwLock<Database<#struct_name>> },
+            quote! { Ok(Self { db: std::sync::RwLock::new(db) }) },
+            quote! { self.db.read().unwrap() },
+            quote! { self.db.write().unwrap() },
+            quote! { &self },
+            quote! { self.db.into_inner().unwrap() },
+        )
+    } else {
+        (
+            quote! { Database<#struct_name> },
+            quote! { Ok(Self { db }) },
+            quote! { self.db },
+            quote! { self.db },
+            quote! { &mut self },
+            quote! { self.db },
+        )
+    };
 
     // build the names for the three enums we need
     let read_params_ident = format_ident!("{}ReadParams", struct_name);
@@ -204,7 +204,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             pub fn delete(self) -> Result<()> {
-                #delete_impl
+                #into_inner.delete()
             }
         }
     };
