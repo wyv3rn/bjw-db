@@ -17,3 +17,8 @@ derive = ["bjw-db-derive"]
 
 [dev-dependencies]
 tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "bjw"
+harness = false

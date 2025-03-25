@@ -196,18 +196,20 @@ impl<T: Clone> Database<T> {
 #[cfg(test)]
 #[cfg(feature = "derive")]
 mod tests {
+    use crate as bjw_db;
+
     use super::*;
     use serde::Deserialize;
     use std::collections::BTreeMap;
     use tempfile::TempDir;
 
     #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
-    struct MyKeyValueStore {
+    struct KeyValueStore {
         store: BTreeMap<String, String>,
     }
 
     #[bjw_db_derive::derive_bjw_db]
-    impl MyKeyValueStore {
+    impl KeyValueStore {
         pub fn insert(&mut self, key: String, value: String) {
             self.store.insert(key, value);
         }
@@ -223,7 +225,7 @@ mod tests {
 
         // create new db
         let path = tempdir.path().join("kv-store");
-        let mut db = MyKeyValueStoreDb::open(&path).unwrap();
+        let mut db = KeyValueStoreDb::open(&path).unwrap();
         db.insert("key".to_string(), "value".to_string()).unwrap();
         db.insert("more".to_string(), "value".to_string()).unwrap();
         assert_eq!(db.get("key"), Some("value".to_string()));
@@ -235,12 +237,12 @@ mod tests {
 
         // re-open db
         let data = db.clone_data();
-        let mut db = MyKeyValueStoreDb::open(&path).unwrap();
+        let mut db = KeyValueStoreDb::open(&path).unwrap();
         assert_eq!(data, db.clone_data());
 
         // create a checkpoint and don't update, but re-open right away (-> tests empty log)
         db.create_checkpoint().unwrap();
-        let db = MyKeyValueStoreDb::open(&path).unwrap();
+        let db = KeyValueStoreDb::open(&path).unwrap();
 
         // delete
         db.delete().unwrap();

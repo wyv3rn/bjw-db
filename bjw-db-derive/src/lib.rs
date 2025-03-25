@@ -147,6 +147,8 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
 
     let original = quote! { #cloned };
     let derived = quote! {
+        use bjw_db::{Database, Readable, Updateable};
+
         enum #read_params_ident<'a> {
             #(#read_params_variants),*
         }
@@ -187,7 +189,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         impl #db_struct_ident {
-            pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+            pub fn open<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
                 let db = Database::open(path)?;
                 #constructor
             }
