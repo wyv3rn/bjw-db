@@ -102,7 +102,19 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         let file = File::open(self.path.join(log_filename))?;
         let lines = BufReader::new(file).lines();
         for line in lines {
-            let parameters: <T as Updateable>::Args = serde_json::from_str(line?.as_ref())?;
+            if line.is_err() {
+                log::error!("Found corrupt line in log, skipping all remaining updates!");
+                return Ok(());
+            }
+            let line = line.unwrap();
+
+            let parameters: <T as Updateable>::Args = match serde_json::from_str(line.as_ref()) {
+                Ok(p) => p,
+                Err(_) => {
+                    log::error!("Found corrupt line in log, skipping all remaning updates!");
+                    return Ok(());
+                }
+            };
             self.data.update(&parameters);
         }
         Ok(())
