@@ -148,6 +148,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
     let original = quote! { #cloned };
     let derived = quote! {
         use bjw_db::{Database, Readable, Updateable};
+        type Result<T> = std::io::Result<T>;
 
         enum #read_params_ident<'a> {
             #(#read_params_variants),*

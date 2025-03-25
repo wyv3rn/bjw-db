@@ -1,11 +1,11 @@
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
-type Result<T> = anyhow::Result<T>;
+type Result<T> = std::io::Result<T>;
 
 pub trait Readable {
     type Args<'a>;
@@ -53,7 +53,9 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
                 std::fs::rename(&new_version_path, &version_path)?;
             }
             let version_str = std::fs::read_to_string(version_path)?;
-            let version: u64 = version_str.parse()?;
+            let version: u64 = version_str.parse().map_err(|_| {
+                std::io::Error::new(ErrorKind::InvalidData, "Could not parse version")
+            })?;
             let mut db = Database {
                 data: <T as Default>::default(),
                 path,

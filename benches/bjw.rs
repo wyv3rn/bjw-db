@@ -11,8 +11,6 @@ struct KeyValueStore {
     store: BTreeMap<u64, String>,
 }
 
-type Result<T> = anyhow::Result<T>;
-
 #[derive_bjw_db(thread_safe)]
 impl KeyValueStore {
     pub fn insert(&mut self, key: u64, value: String) {
