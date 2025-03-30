@@ -124,6 +124,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
                 });
 
                 read_methods.push(quote! {
+                    #[allow(dead_code)]
                     pub fn #method_name(&self, #(#arg_names: #arg_types),*) -> #return_type {
                         match #read_acces.read(&#read_params_ident::#variant_name(#(#arg_names),*)) {
                             #read_return_ident::#variant_name(value) => value,

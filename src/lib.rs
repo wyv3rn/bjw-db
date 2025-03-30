@@ -231,6 +231,10 @@ mod tests {
         pub fn get(&self, key: &str) -> Option<String> {
             self.store.get(key).cloned()
         }
+
+        pub fn unused(&self, _key: &str) -> u64 {
+            unreachable!()
+        }
     }
 
     #[test]
