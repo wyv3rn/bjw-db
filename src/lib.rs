@@ -16,8 +16,9 @@ pub trait Readable {
 
 pub trait Updateable {
     type Args: Serialize + DeserializeOwned;
+    type ReturnType: Clone;
 
-    fn update(&mut self, args: &Self::Args);
+    fn update(&mut self, args: &Self::Args) -> Self::ReturnType;
 }
 
 pub struct Database<T> {
@@ -75,10 +76,12 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         &self.data
     }
 
-    pub fn update(&mut self, parameters: &<T as Updateable>::Args) -> Result<()> {
+    pub fn update(
+        &mut self,
+        parameters: &<T as Updateable>::Args,
+    ) -> Result<<T as Updateable>::ReturnType> {
         self.extend_update_log(parameters)?;
-        self.data.update(parameters);
-        Ok(())
+        Ok(self.data.update(parameters))
     }
 
     pub fn create_checkpoint(&mut self) -> Result<()> {
@@ -228,6 +231,15 @@ mod tests {
             self.store.insert(key, value);
         }
 
+        pub fn insert_with_check(&mut self, key: String, value: String) -> bool {
+            if self.store.contains_key(&key) {
+                false
+            } else {
+                self.insert(key, value);
+                true
+            }
+        }
+
         pub fn get(&self, key: &str) -> Option<String> {
             self.store.get(key).cloned()
         }
@@ -246,6 +258,11 @@ mod tests {
         let mut db = KeyValueStoreDb::open(&path).unwrap();
         db.insert("key".to_string(), "value".to_string()).unwrap();
         db.insert("more".to_string(), "value".to_string()).unwrap();
+        assert_eq!(
+            db.insert_with_check("key".to_string(), "".to_string())
+                .unwrap(),
+            false
+        );
         assert_eq!(db.get("key"), Some("value".to_string()));
 
         // create a checkpoint

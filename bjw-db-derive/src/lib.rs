@@ -58,6 +58,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
     let read_params_ident = format_ident!("{}ReadParams", struct_name);
     let read_return_ident = format_ident!("{}ReadReturn", struct_name);
     let update_params_ident = format_ident!("{}UpdateParams", struct_name);
+    let update_return_ident = format_ident!("{}UpdateReturn", struct_name);
 
     // build the name for the DB wrapper
     let db_struct_ident = format_ident!("{}Db", struct_name);
@@ -67,6 +68,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut read_return_variants = Vec::new();
     let mut read_match_arms = Vec::new();
     let mut update_params_variants = Vec::new();
+    let mut update_return_variants = Vec::new();
     let mut update_match_arms = Vec::new();
     let mut read_methods = Vec::new();
     let mut update_methods = Vec::new();
@@ -114,10 +116,6 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
 
             if is_read {
                 read_params_variants.push(quote! { #variant_name(#(#arg_types_with_lifetime),*) });
-                let return_type = match &method.sig.output {
-                    ReturnType::Type(_, ty) => quote! { #ty },
-                    _ => quote! { () },
-                };
                 read_return_variants.push(quote! { #variant_name(#return_type) });
                 read_match_arms.push(quote! {
                     #read_params_ident::#variant_name(#(#arg_names),*) => #read_return_ident::#variant_name(self.#method_name(#(#cloned_args),*))
@@ -134,13 +132,18 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
                 });
             } else if is_update {
                 update_params_variants.push(quote! { #variant_name(#(#arg_types),*) });
+                update_return_variants.push(quote! { #variant_name(#return_type) });
                 update_match_arms.push(quote! {
-                    #update_params_ident::#variant_name(#(#arg_names),*) => self.#method_name(#(#cloned_args),*)
+                    #update_params_ident::#variant_name(#(#arg_names),*) => #update_return_ident::#variant_name(self.#method_name(#(#cloned_args),*))
                 });
 
                 update_methods.push(quote! {
+                    #[allow(dead_code)]
                     pub fn #method_name(#mut_self, #(#arg_names: #arg_types),*) -> Result<#return_type> {
-                        #write_access.update(&#update_params_ident::#variant_name(#(#arg_names),*))
+                        match #write_access.update(&#update_params_ident::#variant_name(#(#arg_names),*))? {
+                            #update_return_ident::#variant_name(value) => Ok(value),
+                            _ => unreachable!()
+                        }
                     }
                 });
             }
@@ -177,10 +180,16 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
             #(#update_params_variants),*
         }
 
+        #[derive(Clone)]
+        enum #update_return_ident {
+            #(#update_return_variants),*
+        }
+
         impl Updateable for #struct_name {
             type Args = #update_params_ident;
+            type ReturnType = #update_return_ident;
 
-            fn update(&mut self, params: &Self::Args) {
+            fn update(&mut self, params: &Self::Args) -> Self::ReturnType {
                 match params {
                     #(#update_match_arms),*
                 }
