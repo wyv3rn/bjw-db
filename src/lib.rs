@@ -189,7 +189,6 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         if filename == NEW_VERSION_FILE {
             return true;
         };
-
         if let Some((base, ext)) = filename.rsplit_once(DELIM) {
             if base == CHECKPOINT_PREFIX || base == LOG_PREFIX {
                 if let Ok(version) = ext.parse::<u64>() {
@@ -199,7 +198,6 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
                 }
             }
         }
-
         false
     }
 }
@@ -258,10 +256,9 @@ mod tests {
         let mut db = KeyValueStoreDb::open(&path).unwrap();
         db.insert("key".to_string(), "value".to_string()).unwrap();
         db.insert("more".to_string(), "value".to_string()).unwrap();
-        assert_eq!(
-            db.insert_with_check("key".to_string(), "".to_string())
-                .unwrap(),
-            false
+        assert!(
+            !db.insert_with_check("key".to_string(), "".to_string())
+                .unwrap()
         );
         assert_eq!(db.get("key"), Some("value".to_string()));
 

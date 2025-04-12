@@ -139,7 +139,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
 
                 update_methods.push(quote! {
                     #[allow(dead_code)]
-                    pub fn #method_name(#mut_self, #(#arg_names: #arg_types),*) -> Result<#return_type> {
+                    pub fn #method_name(#mut_self, #(#arg_names: #arg_types),*) -> std::io::Result<#return_type> {
                         match #write_access.update(&#update_params_ident::#variant_name(#(#arg_names),*))? {
                             #update_return_ident::#variant_name(value) => Ok(value),
                             _ => unreachable!()
@@ -153,7 +153,6 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
     let original = quote! { #cloned };
     let derived = quote! {
         use bjw_db::{Database, Readable, Updateable};
-        type Result<T> = std::io::Result<T>;
 
         enum #read_params_ident<'a> {
             #(#read_params_variants),*
@@ -201,7 +200,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         impl #db_struct_ident {
-            pub fn open<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+            pub fn open<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
                 let db = Database::open(path)?;
                 #constructor
             }
@@ -209,7 +208,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
             #(#read_methods)*
             #(#update_methods)*
 
-            pub fn create_checkpoint(#mut_self) -> Result<()> {
+            pub fn create_checkpoint(#mut_self) -> std::io::Result<()> {
                 #write_access.create_checkpoint()
             }
 
@@ -217,7 +216,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
                 #read_acces.clone_data()
             }
 
-            pub fn delete(self) -> Result<()> {
+            pub fn delete(self) -> std::io::Result<()> {
                 #into_inner.delete()
             }
         }
