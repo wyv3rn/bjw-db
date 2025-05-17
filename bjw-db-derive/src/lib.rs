@@ -197,7 +197,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
 
         pub struct #db_struct_ident {
             db: #wrapped_type,
-            path: PathBuf,
+            path: std::path::PathBuf,
         }
 
         impl #db_struct_ident {
@@ -206,7 +206,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
                 #constructor
             }
 
-            pub fn path(&self) -> &PathBuf {
+            pub fn path(&self) -> &std::path::PathBuf {
                 &self.path
             }
 
