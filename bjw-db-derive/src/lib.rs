@@ -37,7 +37,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
     {
         (
             quote! { std::sync::RwLock<Database<#struct_name>> },
-            quote! { Ok(Self { db: std::sync::RwLock::new(db) }) },
+            quote! { Ok(Self { db: std::sync::RwLock::new(db), path: path.as_ref().to_path_buf() }) },
             quote! { self.db.read().unwrap() },
             quote! { self.db.write().unwrap() },
             quote! { &self },
@@ -46,7 +46,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         (
             quote! { Database<#struct_name> },
-            quote! { Ok(Self { db }) },
+            quote! { Ok(Self { db, path: path.as_ref().to_path_buf() }) },
             quote! { self.db },
             quote! { self.db },
             quote! { &mut self },
@@ -196,13 +196,18 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         pub struct #db_struct_ident {
-            db: #wrapped_type
+            db: #wrapped_type,
+            path: PathBuf,
         }
 
         impl #db_struct_ident {
             pub fn open<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
-                let db = Database::open(path)?;
+                let db = Database::open(&path)?;
                 #constructor
+            }
+
+            pub fn path(&self) -> &PathBuf {
+                &self.path
             }
 
             #(#read_methods)*

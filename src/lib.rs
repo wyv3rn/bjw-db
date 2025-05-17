@@ -68,6 +68,10 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         }
     }
 
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
     pub fn read(&self, parameters: &<T as Readable>::Args<'_>) -> <T as Readable>::ReturnType {
         self.data.read(parameters)
     }
