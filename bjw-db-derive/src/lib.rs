@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{FnArg, Ident, ItemImpl, PatType, ReturnType, Type, TypeReference, parse_macro_input};
+use syn::{parse_macro_input, FnArg, Ident, ItemImpl, PatType, ReturnType, Type, TypeReference};
 
 fn uppercase_first(input: &str) -> String {
     if input.is_empty() {
@@ -158,7 +158,6 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
             #(#read_params_variants),*
         }
 
-        #[derive(Clone)]
         enum #read_return_ident {
             #(#read_return_variants),*
         }
@@ -179,7 +178,6 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
             #(#update_params_variants),*
         }
 
-        #[derive(Clone)]
         enum #update_return_ident {
             #(#update_return_variants),*
         }

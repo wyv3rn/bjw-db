@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 

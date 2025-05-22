@@ -1,4 +1,4 @@
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, ErrorKind, Write},
@@ -9,14 +9,14 @@ type Result<T> = std::io::Result<T>;
 
 pub trait Readable {
     type Args<'a>;
-    type ReturnType: Clone;
+    type ReturnType;
 
     fn read(&self, args: &Self::Args<'_>) -> Self::ReturnType;
 }
 
 pub trait Updateable {
     type Args: Serialize + DeserializeOwned;
-    type ReturnType: Clone;
+    type ReturnType;
 
     fn update(&mut self, args: &Self::Args) -> Self::ReturnType;
 }
@@ -260,10 +260,9 @@ mod tests {
         let mut db = KeyValueStoreDb::open(&path).unwrap();
         db.insert("key".to_string(), "value".to_string()).unwrap();
         db.insert("more".to_string(), "value".to_string()).unwrap();
-        assert!(
-            !db.insert_with_check("key".to_string(), "".to_string())
-                .unwrap()
-        );
+        assert!(!db
+            .insert_with_check("key".to_string(), "".to_string())
+            .unwrap());
         assert_eq!(db.get("key"), Some("value".to_string()));
 
         // create a checkpoint
