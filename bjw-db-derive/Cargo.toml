@@ -1,7 +1,8 @@
 [package]
 name = "bjw-db-derive"
 version = "0.1.0"
-edition = "2024"
+authors = ["David Schatz"]
+edition = "2021"
 
 [lib]
 proc-macro = true
