@@ -272,6 +272,9 @@ where
     }
 }
 
+#[cfg(feature = "derive")]
+pub use bjw_db_derive::derive_bjw_db;
+
 #[cfg(test)]
 #[cfg(feature = "derive")]
 mod tests {
