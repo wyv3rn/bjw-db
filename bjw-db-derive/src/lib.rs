@@ -1,6 +1,7 @@
+use darling::{ast::NestedMeta, Error, FromMeta};
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, FnArg, Ident, ItemImpl, PatType, ReturnType, Type, TypeReference};
+use syn::{parse_macro_input, FnArg, ItemImpl, PatType, ReturnType, Type, TypeReference};
 
 fn uppercase_first(input: &str) -> String {
     if input.is_empty() {
@@ -16,12 +17,35 @@ fn uppercase_first(input: &str) -> String {
     }
 }
 
+#[derive(Default, FromMeta)]
+#[darling(default)]
+struct DeriveArgs {
+    thread_safe: bool,
+    fmt: Option<String>,
+}
+
 #[proc_macro_attribute]
 pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
-    let thread_safe = match syn::parse::<Ident>(args) {
-        Ok(i) => i == "thread_safe",
-        Err(_) => false,
+    let attr_args = match NestedMeta::parse_meta_list(args.into()) {
+        Ok(v) => v,
+        Err(e) => {
+            return TokenStream::from(Error::from(e).write_errors());
+        }
     };
+    let args = match DeriveArgs::from_list(&attr_args) {
+        Ok(v) => v,
+        Err(e) => {
+            return TokenStream::from(e.write_errors());
+        }
+    };
+    let (fmt, import_json_fmt) = match args.fmt {
+        Some(f) => (format_ident!("{}", f), quote! {}),
+        None => (
+            format_ident!("JsonFormat"),
+            quote! { use bjw_db::JsonFormat; },
+        ),
+    };
+    let fmt = format_ident!("{}", fmt);
 
     let input = parse_macro_input!(item as ItemImpl);
     let cloned = input.clone();
@@ -33,10 +57,11 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // some things differ between the thread_safe and the not thread_safe version
-    let (wrapped_type, constructor, read_acces, write_access, mut_self, into_inner) = if thread_safe
+    let (wrapped_type, constructor, read_acces, write_access, mut_self, into_inner) = if args
+        .thread_safe
     {
         (
-            quote! { std::sync::RwLock<Database<#struct_name>> },
+            quote! { std::sync::RwLock<Database<#struct_name, #fmt<#struct_name>>> },
             quote! { Ok(Self { db: std::sync::RwLock::new(db), path: path.as_ref().to_path_buf() }) },
             quote! { self.db.read().unwrap() },
             quote! { self.db.write().unwrap() },
@@ -45,7 +70,7 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
         )
     } else {
         (
-            quote! { Database<#struct_name> },
+            quote! { Database<#struct_name, #fmt<#struct_name>> },
             quote! { Ok(Self { db, path: path.as_ref().to_path_buf() }) },
             quote! { self.db },
             quote! { self.db },
@@ -152,7 +177,8 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
 
     let original = quote! { #cloned };
     let derived = quote! {
-        use bjw_db::{Database, Readable, Updateable};
+        use bjw_db::{Database, Readable, Updateable, DataFormat};
+        #import_json_fmt
 
         enum #read_params_ident<'a> {
             #(#read_params_variants),*
@@ -200,7 +226,8 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
 
         impl #db_struct_ident {
             pub fn open<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
-                let db = Database::open(&path)?;
+                let fmt = #fmt::<#struct_name>::new();
+                let db = Database::open(&path, fmt)?;
                 #constructor
             }
 

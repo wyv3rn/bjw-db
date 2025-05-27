@@ -1,7 +1,7 @@
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, ErrorKind, Write},
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
@@ -21,10 +21,21 @@ pub trait Updateable {
     fn update(&mut self, args: &Self::Args) -> Self::ReturnType;
 }
 
-pub struct Database<T> {
+pub struct Database<T, F> {
     data: T,
+    fmt: F,
     path: PathBuf,
     version: u64,
+}
+
+pub trait DataFormat {
+    type Data: Serialize + DeserializeOwned + Readable + Updateable;
+
+    fn new() -> Self;
+    fn serialize_data(&self, data: &Self::Data) -> Result<Vec<u8>>;
+    fn deserialize_data(&self, input: &[u8]) -> Result<Self::Data>;
+    fn serialize_params(&self, params: &<Self::Data as Updateable>::Args) -> Result<Vec<u8>>;
+    fn deserialize_params(&self, input: &[u8]) -> Result<Vec<<Self::Data as Updateable>::Args>>;
 }
 
 const VERSION_FILE: &str = "version";
@@ -33,13 +44,18 @@ const CHECKPOINT_PREFIX: &str = "checkpoint";
 const LOG_PREFIX: &str = "logfile";
 const DELIM: char = '.';
 
-impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database<T> {
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Database<T>> {
+impl<T, F> Database<T, F>
+where
+    T: Default + Serialize + DeserializeOwned + Readable + Updateable,
+    F: DataFormat<Data = T>,
+{
+    pub fn open<P: AsRef<Path>>(path: P, fmt: F) -> Result<Database<T, F>> {
         let path = path.as_ref().to_path_buf();
         if !path.exists() {
             std::fs::create_dir_all(&path)?;
             let db = Database {
                 data: <T as Default>::default(),
+                fmt,
                 path,
                 version: 0,
             };
@@ -59,6 +75,7 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
             })?;
             let mut db = Database {
                 data: <T as Default>::default(),
+                fmt,
                 path,
                 version,
             };
@@ -106,23 +123,10 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
 
     fn replay_updates(&mut self) -> Result<()> {
         let log_filename = format!("{LOG_PREFIX}{DELIM}{}", self.version);
-        let file = File::open(self.path.join(log_filename))?;
-        let lines = BufReader::new(file).lines();
-        for line in lines {
-            if line.is_err() {
-                log::error!("Found corrupt line in log, skipping all remaining updates!");
-                return Ok(());
-            }
-            let line = line.unwrap();
-
-            let parameters: <T as Updateable>::Args = match serde_json::from_str(line.as_ref()) {
-                Ok(p) => p,
-                Err(_) => {
-                    log::error!("Found corrupt line in log, skipping all remaning updates!");
-                    return Ok(());
-                }
-            };
-            self.data.update(&parameters);
+        let ser = std::fs::read(self.path.join(log_filename))?;
+        let updates = self.fmt.deserialize_params(&ser)?;
+        for params in updates {
+            self.data.update(&params);
         }
         Ok(())
     }
@@ -137,20 +141,19 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
         Ok(path.clone())
     }
 
-    fn extend_update_log(&self, parameters: &<T as Updateable>::Args) -> Result<()> {
+    fn extend_update_log(&self, params: &<T as Updateable>::Args) -> Result<()> {
         let path = self.create_logfile_if_required()?;
-        let mut json_str = serde_json::to_string(parameters)?;
-        json_str.push('\n');
+        let ser = self.fmt.serialize_params(params)?;
         let mut file = OpenOptions::new().append(true).open(path)?;
-        file.write_all(json_str.as_bytes())?;
+        file.write_all(&ser)?;
         file.sync_all()?;
         Ok(())
     }
 
     fn read_checkpoint_file(&mut self) -> Result<()> {
         let filename = format!("{CHECKPOINT_PREFIX}{DELIM}{}", self.version);
-        let json_str = std::fs::read_to_string(self.path.join(filename))?;
-        let data: T = serde_json::from_str(&json_str)?;
+        let ser = std::fs::read(self.path.join(filename))?;
+        let data: T = self.fmt.deserialize_data(&ser)?;
         self.data = data;
         Ok(())
     }
@@ -158,8 +161,8 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
     fn write_checkpoint_file(&self) -> Result<()> {
         let filename = format!("{CHECKPOINT_PREFIX}{DELIM}{}", self.version);
         let mut file = File::create(self.path.join(filename))?;
-        let json_str = serde_json::to_string(&self.data)?;
-        file.write_all(json_str.as_bytes())?;
+        let ser = self.fmt.serialize_data(&self.data)?;
+        file.write_all(&ser)?;
         file.sync_all()?;
         Ok(())
     }
@@ -206,9 +209,66 @@ impl<T: Default + Serialize + DeserializeOwned + Readable + Updateable> Database
     }
 }
 
-impl<T: Clone> Database<T> {
+impl<T: Clone, F> Database<T, F> {
     pub fn clone_data(&self) -> T {
         self.data.clone()
+    }
+}
+
+#[cfg(feature = "json")]
+use std::marker::PhantomData;
+
+#[cfg(feature = "json")]
+pub struct JsonFormat<T> {
+    _phantom: PhantomData<T>,
+}
+
+#[cfg(feature = "json")]
+impl<T> DataFormat for JsonFormat<T>
+where
+    T: Serialize + DeserializeOwned + Updateable + Readable,
+{
+    type Data = T;
+
+    fn new() -> Self {
+        JsonFormat::<T> {
+            _phantom: PhantomData,
+        }
+    }
+
+    fn serialize_data(&self, data: &Self::Data) -> Result<Vec<u8>> {
+        Ok(serde_json::to_string(data)?.as_bytes().to_vec())
+    }
+
+    fn deserialize_data(&self, input: &[u8]) -> Result<Self::Data> {
+        let str = std::str::from_utf8(input)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(serde_json::from_str(str)?)
+    }
+
+    fn serialize_params(&self, params: &<Self::Data as Updateable>::Args) -> Result<Vec<u8>> {
+        let mut string = serde_json::to_string(params)?;
+        string.push('\n');
+        Ok(string.as_bytes().to_vec())
+    }
+
+    fn deserialize_params(&self, input: &[u8]) -> Result<Vec<<Self::Data as Updateable>::Args>> {
+        let str = std::str::from_utf8(input)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let mut updates = Vec::new();
+        for line in str.split('\n') {
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str(line) {
+                Ok(params) => updates.push(params),
+                Err(e) => {
+                    log::error!("Failed to deserialize an update (error: {e}); skipping all remaining ones!");
+                    return Ok(updates);
+                }
+            }
+        }
+        Ok(updates)
     }
 }
 
