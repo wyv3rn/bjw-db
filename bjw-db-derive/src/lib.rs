@@ -180,11 +180,11 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
         use bjw_db::{Database, Readable, Updateable, DataFormat};
         #import_json_fmt
 
-        enum #read_params_ident<'a> {
+        pub enum #read_params_ident<'a> {
             #(#read_params_variants),*
         }
 
-        enum #read_return_ident {
+        pub enum #read_return_ident {
             #(#read_return_variants),*
         }
 
@@ -200,11 +200,11 @@ pub fn derive_bjw_db(args: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         #[derive(serde::Serialize, serde::Deserialize)]
-        enum #update_params_ident {
+        pub enum #update_params_ident {
             #(#update_params_variants),*
         }
 
-        enum #update_return_ident {
+        pub enum #update_return_ident {
             #(#update_return_variants),*
         }
 
